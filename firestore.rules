@@ -1,0 +1,211 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /**
+     * SENTINEL SECURITY RULES - PROTOTYPING MODE
+     * 
+     * Core Philosophy:
+     * This ruleset implements a robust "Identity-Based Access" model. While data schemas are 
+     * flexible to allow for rapid iteration, authorization is strictly enforced based on 
+     * user UIDs and denormalized ownership fields.
+     * 
+     * Data Structure:
+     * - /users/{userId}: Private user profiles keyed by Auth UID.
+     * - /workflows/{workflowId}: Enterprise workflow instances with nested 'steps' and 'auditEntries'.
+     * - /agents/{agentId}: System-wide AI agent monitoring and logs.
+     * - /notifications & /approvalRequests: Top-level collections using denormalized 'userId' or 'approverId' 
+     *   for fast, independent authorization.
+     * 
+     * Key Security Decisions:
+     * 1. Authorization Independence: We rely on fields like 'assignedTo', 'userId', and 'approverId' 
+     *    directly on documents to avoid costly cross-document 'get()' lookups.
+     * 2. Immutable Audits: Audit entries and activity logs allow creation but strictly forbid 
+     *    updates or deletions to preserve the integrity of the system's history.
+     * 3. Role-Based Placeholders: For admin-level configs (SLA, Integrations), we utilize 
+     *    a helper function that can be expanded to check specific 'role' fields in the user profile.
+     * 4. Path-to-Data Consistency: For user-owned paths, we ensure the internal document ID 
+     *    matches the URL path to prevent data spoofing.
+     */
+
+    // --- Helper Functions ---
+
+    /** @description Checks if the request is from an authenticated user. */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /** @description Checks if the authenticated user's UID matches the provided ID. */
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    /** @description Checks if the user owns the document and the document exists (for updates/deletes). */
+    function isExistingOwner(userId) {
+      return resource != null && isOwner(userId);
+    }
+
+    /** @description Checks if the user has a specific role. Requires a look-up to the users collection. */
+    function hasRole(role) {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
+    }
+
+    /** @description Determines if the user is an admin for configuration purposes. */
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    // --- Collection Rules ---
+
+    /**
+     * @description Access control for individual user profiles.
+     * @path /users/{userId}
+     * @allow (get, list, create, update) if request.auth.uid == userId
+     * @deny (delete) always, to prevent accidental profile loss.
+     * @principle Enforces path-based ownership and self-creation consistency.
+     */
+    match /users/{userId} {
+      allow get, list: if isOwner(userId);
+      allow create: if isOwner(userId) && request.resource.data.id == userId;
+      allow update: if isExistingOwner(userId) && request.resource.data.id == resource.data.id;
+      allow delete: if false;
+    }
+
+    /**
+     * @description Access control for workflow instances. Broad read for participants, write for assigned users.
+     * @path /workflows/{workflowId}
+     * @allow (get, list) if authenticated.
+     * @allow (create) if the user sets themselves as the 'triggeredBy'.
+     * @deny (update) if the user is not assigned to or did not trigger the workflow.
+     * @principle Uses denormalized ownership fields (assignedTo/triggeredBy) for authorization.
+     */
+    match /workflows/{workflowId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.triggeredBy == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.assignedTo == request.auth.uid || resource.data.triggeredBy == request.auth.uid);
+      allow delete: if isAdmin();
+
+      /**
+       * @description Individual steps within a workflow.
+       * @path /workflows/{workflowId}/steps/{stepId}
+       * @principle Inherits broad read access; allows human approvers to update their specific steps.
+       */
+      match /steps/{stepId} {
+        allow get, list: if isSignedIn();
+        allow create: if isSignedIn();
+        allow update: if isSignedIn() && (resource.data.humanApproverId == request.auth.uid || isAdmin());
+        allow delete: if isAdmin();
+      }
+
+      /**
+       * @description Immutable audit logs for workflow integrity.
+       * @path /workflows/{workflowId}/auditEntries/{auditEntryId}
+       * @principle Enforces immutability by allowing create but denying update and delete.
+       */
+      match /auditEntries/{auditEntryId} {
+        allow get, list: if isSignedIn();
+        allow create: if isSignedIn();
+        allow update, delete: if false;
+      }
+    }
+
+    /**
+     * @description Status and performance monitoring for AI agents.
+     * @path /agents/{agentId}
+     * @principle Agents are system-level; users can view status, but only admins/system can modify.
+     */
+    match /agents/{agentId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+
+      /**
+       * @description Immutable history of agent actions.
+       * @path /agents/{agentId}/activityLog/{logId}
+       */
+      match /activityLog/{logId} {
+        allow get, list: if isSignedIn();
+        allow create: if isSignedIn();
+        allow update, delete: if false;
+      }
+    }
+
+    /**
+     * @description Recipient-specific notifications.
+     * @path /notifications/{notificationId}
+     * @allow (get, list, update) if resource.data.userId == request.auth.uid.
+     * @principle Uses denormalized 'userId' for authorization independence.
+     */
+    match /notifications/{notificationId} {
+      allow get, list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    /**
+     * @description Requests for human intervention in workflows.
+     * @path /approvalRequests/{approvalRequestId}
+     * @principle Allows both the requester and the assigned approver to access the document.
+     */
+    match /approvalRequests/{approvalRequestId} {
+      allow get, list: if isSignedIn() && (resource.data.approverId == request.auth.uid || resource.data.requesterId == request.auth.uid);
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (resource.data.approverId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    /**
+     * @description Configuration for Service Level Agreements.
+     * @path /slaConfig/{workflowType}
+     * @principle Publicly readable configuration, but restricted write access.
+     */
+    match /slaConfig/{workflowType} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    /**
+     * @description Configuration for external system integrations.
+     * @path /integrations/{integrationId}
+     * @principle Sensitive configuration; restricted to admins only.
+     */
+    match /integrations/{integrationId} {
+      allow read, write: if isAdmin();
+    }
+
+    /**
+     * @description Summarized past workflow runs for agent learning.
+     * @path /episodicMemoryByWorkflowType/{workflowType}/memories/{memoryId}
+     * @principle System-wide knowledge base; immutable for history integrity.
+     */
+    match /episodicMemoryByWorkflowType/{workflowType}/memories/{memoryId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+  }
+}
+
+/**
+ * --- MAJOR PROBLEM ANALYSIS ---
+ * 
+ * The primary architectural flaw in this application's security model is the 
+ * RELIANCE ON CLIENT-SIDE TRUST FOR CRYPTOGRAPHIC INTEGRITY.
+ * 
+ * The IR describes 'AuditEntry' and 'Workflow' as having 'auditChainHead', 
+ * 'previousHash', and 'currentHash' to ensure "cryptographic chain integrity." 
+ * However, Firestore Security Rules (even Version 2) lack the computational 
+ * power to perform SHA-256 hashing or verify complex cryptographic signatures.
+ * 
+ * Because the Rules cannot verify if 'currentHash' is actually the valid hash 
+ * of the document's content combined with the 'previousHash', a malicious 
+ * client or a compromised user account can:
+ * 1. Inject fake audit entries with fabricated hashes.
+ * 2. Break the chain by providing a 'previousHash' that doesn't match the 
+ *    actual preceding document.
+ * 
+ * To solve this, the generation of hashes and the writing of AuditEntries 
+ * should be moved entirely to a "Trusted Environment" (Firebase Cloud Functions), 
+ * and the Security Rules should be updated to only allow writes to these 
+ * collections from an Admin SDK or a specific service account.
+ */
