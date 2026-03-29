@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Cpu, Zap, ShieldCheck, BrainCircuit, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,11 +16,11 @@ export default function LandingPage() {
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
             <Cpu className="h-6 w-6" />
           </div>
-          <span className="font-headline font-bold text-2xl tracking-tighter">SENTINEL</span>
+          <span className="font-headline font-bold text-2xl tracking-tighter text-foreground">SENTINEL</span>
         </div>
         <div className="flex items-center gap-4">
           <Button variant="ghost" onClick={() => router.push("/dashboard")}>Documentation</Button>
-          <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => router.push("/dashboard")}>
+          <Button className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => router.push("/dashboard")}>
             Launch Platform
           </Button>
         </div>
@@ -77,15 +76,11 @@ export default function LandingPage() {
       <footer className="border-t border-border/50 p-8 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-muted-foreground font-mono uppercase tracking-widest">
         <p>&copy; 2024 SENTINEL Platform. All rights reserved.</p>
         <div className="flex gap-8">
-          <Link href="#" className="hover:text-primary transition-colors">Security</Link>
-          <Link href="#" className="hover:text-primary transition-colors">API</Link>
-          <Link href="#" className="hover:text-primary transition-colors">Status</Link>
+          <a href="#" className="hover:text-primary transition-colors">Security</a>
+          <a href="#" className="hover:text-primary transition-colors">API</a>
+          <a href="#" className="hover:text-primary transition-colors">Status</a>
         </div>
       </footer>
     </div>
   );
-}
-
-function Link({ href, children, className }: any) {
-  return <a href={href} className={className}>{children}</a>;
 }
