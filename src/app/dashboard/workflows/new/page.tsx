@@ -11,21 +11,70 @@ import { Badge } from "@/components/ui/badge";
 import { Bot, Users, BrainCircuit, ArrowRight, ArrowLeft, CheckCircle2, Zap } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
+import { useFirestore, useUser, addDocumentNonBlocking } from "@/firebase";
+import { collection } from "firebase/firestore";
 
 type WorkflowType = "procurement" | "onboarding" | "meeting";
 
 export default function NewWorkflowPage() {
   const [step, setStep] = useState(1);
   const [type, setType] = useState<WorkflowType>("procurement");
+  const [formData, setFormData] = useState<Record<string, string>>({});
+  const [isLaunching, setIsLaunching] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
+  const firestore = useFirestore();
+  const { user } = useUser();
 
   const handleLaunch = () => {
+    if (!firestore || !user) {
+      toast({
+        variant: "destructive",
+        title: "Connection Error",
+        description: "Cognitive mesh not yet authenticated.",
+      });
+      return;
+    }
+
+    setIsLaunching(true);
+
+    const newWorkflow = {
+      id: `${type.toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`,
+      name: formData.name || formData.vendorName || "New Workflow",
+      type: type,
+      status: "running",
+      priority: "high",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      slaDeadline: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+      slaStatus: "on_track",
+      triggeredBy: user.uid,
+      currentStepIndex: 0,
+      totalSteps: 5,
+      completedSteps: 0,
+      input: JSON.stringify(formData),
+      output: "{}",
+      errorCount: 0,
+      selfHealingAttempts: 0,
+      humanInterventions: 0,
+      auditChainHead: "GENESIS",
+      tags: [type, "autonomous"],
+    };
+
+    addDocumentNonBlocking(collection(firestore, "workflows"), newWorkflow);
+
     toast({
       title: "Workflow Initialized",
       description: "SENTINEL has started the orchestration flow.",
     });
-    router.push("/dashboard/workflows");
+    
+    setTimeout(() => {
+      router.push("/dashboard/workflows");
+    }, 1000);
+  };
+
+  const updateField = (field: string, value: string) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
   };
 
   return (
@@ -87,15 +136,15 @@ export default function NewWorkflowPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
                   <Label>Vendor Name</Label>
-                  <Input placeholder="Acme Corp" className="bg-slate-900/50" />
+                  <Input placeholder="Acme Corp" className="bg-slate-900/50" onChange={(e) => updateField("vendorName", e.target.value)} />
                 </div>
                 <div className="space-y-2">
                   <Label>Budget Code</Label>
-                  <Input placeholder="DEPT-OPEX-2024" className="bg-slate-900/50" />
+                  <Input placeholder="DEPT-OPEX-2024" className="bg-slate-900/50" onChange={(e) => updateField("budgetCode", e.target.value)} />
                 </div>
                 <div className="space-y-2 md:col-span-2">
                   <Label>Justification</Label>
-                  <Textarea placeholder="Explain why this procurement is required..." className="bg-slate-900/50 min-h-[100px]" />
+                  <Textarea placeholder="Explain why this procurement is required..." className="bg-slate-900/50 min-h-[100px]" onChange={(e) => updateField("justification", e.target.value)} />
                 </div>
               </div>
             )}
@@ -103,15 +152,15 @@ export default function NewWorkflowPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
                   <Label>Employee Name</Label>
-                  <Input placeholder="Jane Doe" className="bg-slate-900/50" />
+                  <Input placeholder="Jane Doe" className="bg-slate-900/50" onChange={(e) => updateField("name", e.target.value)} />
                 </div>
                 <div className="space-y-2">
                   <Label>Start Date</Label>
-                  <Input type="date" className="bg-slate-900/50" />
+                  <Input type="date" className="bg-slate-900/50" onChange={(e) => updateField("startDate", e.target.value)} />
                 </div>
                 <div className="space-y-2">
                   <Label>Department</Label>
-                  <Select>
+                  <Select onValueChange={(v) => updateField("department", v)}>
                     <SelectTrigger className="bg-slate-900/50">
                       <SelectValue placeholder="Select Dept" />
                     </SelectTrigger>
@@ -127,20 +176,12 @@ export default function NewWorkflowPage() {
             {type === "meeting" && (
               <div className="space-y-6">
                 <div className="space-y-2">
-                  <Label>Meeting Transcript</Label>
-                  <Textarea placeholder="Paste raw meeting transcript here..." className="bg-slate-900/50 min-h-[200px]" />
+                  <Label>Meeting Title</Label>
+                  <Input placeholder="Project X Kickoff" className="bg-slate-900/50" onChange={(e) => updateField("name", e.target.value)} />
                 </div>
                 <div className="space-y-2">
-                  <Label>Reference Previous Meeting (Optional)</Label>
-                  <Select>
-                    <SelectTrigger className="bg-slate-900/50">
-                      <SelectValue placeholder="Select Meeting" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="prev-1">Strategic Planning Q3</SelectItem>
-                      <SelectItem value="prev-2">Weekly Ops Sync #42</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label>Meeting Transcript</Label>
+                  <Textarea placeholder="Paste raw meeting transcript here..." className="bg-slate-900/50 min-h-[200px]" onChange={(e) => updateField("transcript", e.target.value)} />
                 </div>
               </div>
             )}
@@ -181,7 +222,7 @@ export default function NewWorkflowPage() {
         <Button 
           variant="outline" 
           onClick={() => setStep(step - 1)} 
-          disabled={step === 1}
+          disabled={step === 1 || isLaunching}
           className="gap-2"
         >
           <ArrowLeft className="h-4 w-4" /> Previous
@@ -196,9 +237,10 @@ export default function NewWorkflowPage() {
         ) : (
           <Button 
             onClick={handleLaunch}
+            disabled={isLaunching}
             className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
           >
-            Launch Autonomous Mesh <Zap className="h-4 w-4" />
+            {isLaunching ? "Provisioning..." : "Launch Autonomous Mesh"} <Zap className="h-4 w-4" />
           </Button>
         )}
       </div>

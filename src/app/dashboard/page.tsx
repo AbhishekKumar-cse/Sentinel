@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -14,14 +15,32 @@ import {
   Users
 } from "lucide-react";
 import Link from "next/link";
+import { collection, query, limit, orderBy } from "firebase/firestore";
+import { useFirestore, useCollection, useMemoFirebase, useAuth } from "@/firebase";
+import { signInAnonymously } from "firebase/auth";
 import { SLAGaugeChart } from "@/components/dashboard/SLAGaugeChart";
 import { AgentStatusGrid } from "@/components/dashboard/AgentStatusGrid";
 import { RecentDecisionsFeed } from "@/components/dashboard/RecentDecisionsFeed";
 
 export default function CommandCenter() {
+  const { auth, firestore } = useFirestore() ? { auth: useAuth(), firestore: useFirestore() } : { auth: null, firestore: null };
+
+  // Auto-login for prototype access
+  useEffect(() => {
+    if (auth && !auth.currentUser) {
+      signInAnonymously(auth);
+    }
+  }, [auth]);
+
+  const workflowsQuery = useMemoFirebase(() => {
+    if (!firestore) return null;
+    return query(collection(firestore, "workflows"), orderBy("createdAt", "desc"), limit(5));
+  }, [firestore]);
+
+  const { data: workflows, isLoading } = useCollection(workflowsQuery);
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      {/* Hero Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
           { label: "SLA Compliance", value: "98.4%", icon: ShieldAlert, trend: "+1.2%", color: "text-emerald-500" },
@@ -49,7 +68,6 @@ export default function CommandCenter() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Agent Fleet Status */}
         <div className="lg:col-span-2 space-y-8">
           <div className="flex items-center justify-between">
             <div>
@@ -62,7 +80,6 @@ export default function CommandCenter() {
           </div>
           <AgentStatusGrid />
 
-          {/* Active Workflows */}
           <Card className="bg-card/40 border-border/50">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div>
@@ -75,41 +92,47 @@ export default function CommandCenter() {
             </CardHeader>
             <CardContent>
               <div className="space-y-6">
-                {[
-                  { name: "P2P-2024-001847", type: "Procurement", status: "In Progress", progress: 65, sla: "On Track", agent: "Executor" },
-                  { name: "ONB-EM-8821", type: "Onboarding", status: "Awaiting Human", progress: 42, sla: "At Risk", agent: "Orchestrator" },
-                  { name: "MEET-INT-4410", type: "Meeting", status: "Verification", progress: 88, sla: "On Track", agent: "Verifier" },
-                ].map((workflow, i) => (
-                  <div key={i} className="group relative flex flex-col gap-3 p-4 rounded-xl bg-slate-900/30 border border-transparent hover:border-border/50 transition-all">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
-                          {workflow.type === "Procurement" ? <Bot /> : workflow.type === "Onboarding" ? <Users /> : <BrainCircuit />}
+                {isLoading ? (
+                  <p className="text-sm text-muted-foreground animate-pulse text-center py-8">Syncing with SENTINEL node...</p>
+                ) : workflows && workflows.length > 0 ? (
+                  workflows.map((workflow, i) => (
+                    <div key={workflow.id} className="group relative flex flex-col gap-3 p-4 rounded-xl bg-slate-900/30 border border-transparent hover:border-border/50 transition-all">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
+                            {workflow.type === "procurement" ? <Bot /> : workflow.type === "onboarding" ? <Users /> : <BrainCircuit />}
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold font-mono">{workflow.id}</p>
+                            <p className="text-xs text-muted-foreground capitalize">{workflow.type} Workflow</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-bold font-mono">{workflow.name}</p>
-                          <p className="text-xs text-muted-foreground">{workflow.type} Workflow</p>
+                        <Badge variant={workflow.slaStatus === "at_risk" ? "destructive" : "secondary"}>
+                          {workflow.slaStatus === "on_track" ? "On Track" : workflow.slaStatus}
+                        </Badge>
+                      </div>
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-[10px] font-medium text-muted-foreground uppercase tracking-widest">
+                          <span>Status: {workflow.status}</span>
+                          <span>{workflow.totalSteps > 0 ? Math.round((workflow.completedSteps / workflow.totalSteps) * 100) : 0}%</span>
                         </div>
+                        <Progress value={workflow.totalSteps > 0 ? (workflow.completedSteps / workflow.totalSteps) * 100 : 0} className="h-1.5" />
                       </div>
-                      <Badge variant={workflow.sla === "At Risk" ? "destructive" : "secondary"}>
-                        {workflow.sla}
-                      </Badge>
                     </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-[10px] font-medium text-muted-foreground uppercase tracking-widest">
-                        <span>Current: {workflow.agent} Agent</span>
-                        <span>{workflow.progress}%</span>
-                      </div>
-                      <Progress value={workflow.progress} className="h-1.5" />
-                    </div>
+                  ))
+                ) : (
+                  <div className="text-center py-12 border border-dashed rounded-xl border-border/50">
+                    <p className="text-sm text-muted-foreground">No active workflows found in the cognitive mesh.</p>
+                    <Button variant="link" asChild className="mt-2">
+                      <Link href="/dashboard/workflows/new">Launch your first workflow</Link>
+                    </Button>
                   </div>
-                ))}
+                )}
               </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Sidebar Widgets */}
         <div className="space-y-8">
           <Card className="bg-card/40 border-border/50">
             <CardHeader>
